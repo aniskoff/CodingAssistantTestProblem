@@ -2,6 +2,26 @@ import ast
 import operator
 
 
+def is_same_op(op1, op2):
+    if isinstance(op1, (ast.Add, ast.Sub)) and isinstance(op2, (ast.Add, ast.Sub)):
+        return True
+
+    if isinstance(op1, (ast.Mult, ast.Div)) and isinstance(op2, (ast.Mult, ast.Div)):
+        return True
+
+    return False
+
+
+def get_same_op(op):
+    if isinstance(op, (ast.Add, ast.Sub)):
+        return ast.Add
+
+    if isinstance(op, (ast.Mult, ast.Div)):
+        return ast.Mult
+
+    return False
+
+
 class ConstantOptimizer(ast.NodeTransformer):
     # mapping ast operators to "action" operators
     _ast_op_to_action_op = {
@@ -45,12 +65,12 @@ class ConstantOptimizer(ast.NodeTransformer):
         left = node.left
         right = node.right
         op = node.op
+        op_action = self._ast_op_to_action_op[op.__class__]
 
         const_like_types = (ast.Constant, ast.Num, ast.Str, ast.NameConstant, ast.Bytes)
         if isinstance(left, const_like_types) and isinstance(right, const_like_types):
             left_val = ConstantOptimizer._common_value_getter(left)
             right_val = ConstantOptimizer._common_value_getter(right)
-            op_action = self._ast_op_to_action_op[op.__class__]
             return ast.Constant(value=op_action(left_val, right_val))
 
         # Handles expressions such as:
@@ -70,9 +90,6 @@ class ConstantOptimizer(ast.NodeTransformer):
                 elif isinstance(op, ast.Add):
                     return right
 
-                else:
-                    return node
-
             elif left_val == 1:
                 if isinstance(op, ast.Mult):
                     return right
@@ -80,11 +97,12 @@ class ConstantOptimizer(ast.NodeTransformer):
                 elif isinstance(op, ast.Pow):
                     return ast.Constant(value=1)
 
-                else:
-                    return node
+            elif isinstance(right, ast.BinOp) and is_same_op(op, right.op) and isinstance(right.op, (ast.Add, ast.Mult)):
+                left_val = ConstantOptimizer._common_value_getter(left)
+                right_val = ConstantOptimizer._common_value_getter(right.left)
+                return ast.BinOp(op=get_same_op(op), left=op_action(left_val, right_val), right=right.right)
 
-            else:
-                return node
+            return node
 
         # The same as previous one,
         # but with 1 or 0 on the right side of the expression
@@ -109,9 +127,6 @@ class ConstantOptimizer(ast.NodeTransformer):
                 elif isinstance(op, ast.Pow):
                     return ast.Constant(value=1)
 
-                else:
-                    return node
-
             elif right_val == 1:
                 if isinstance(op, (ast.Mult, ast.Pow)):
                     return left
@@ -119,13 +134,31 @@ class ConstantOptimizer(ast.NodeTransformer):
                 elif isinstance(op, ast.Pow):
                     return ast.Constant(value=1)
 
-                else:
-                    return node
+            elif isinstance(left, ast.BinOp) and is_same_op(op, left.op) and isinstance(left.op, (ast.Add, ast.Mult)):
+                left_val = ConstantOptimizer._common_value_getter(left.left)
+                right_val = ConstantOptimizer._common_value_getter(right)
+                return ast.BinOp(op=get_same_op(op), left=op_action(left_val, right_val), right=left.right)
 
-            else:
-                return node
-
-        else:
+            if isinstance(op, (ast.Add, ast.Mult)):
+                node.left, node.right = right, left
 
             return node
+
+        else:
+            if not isinstance(op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+                return node
+            if isinstance(left, ast.BinOp) and is_same_op(op, left.op) and isinstance(left.op, (ast.Add, ast.Mult)) \
+               and isinstance(right, ast.BinOp) and is_same_op(op, right.op) and isinstance(right.op, (ast.Add, ast.Mult)):
+                if isinstance(left.left, const_like_types) and isinstance(right.left, const_like_types):
+                    left_val = ConstantOptimizer._common_value_getter(left.left)
+                    right_val = ConstantOptimizer._common_value_getter(right.left)
+                    return ast.BinOp(op=get_same_op(op), left=op_action(left_val, right_val), right=ast.BinOp(op=op, left=left.right, right=right.right))
+                elif isinstance(left.left, const_like_types):
+                    left_val = ConstantOptimizer._common_value_getter(left.left)
+                    return ast.BinOp(op=get_same_op(op), left=left_val, right=ast.BinOp(op=op, left=left.right, right=right))
+                elif isinstance(right.left, const_like_types):
+                    right_val = ConstantOptimizer._common_value_getter(right.left)
+                    return ast.BinOp(op=get_same_op(op), left=right_val, right=ast.BinOp(op=op, left=left, right=right.right))
+            else:
+                return node
 
